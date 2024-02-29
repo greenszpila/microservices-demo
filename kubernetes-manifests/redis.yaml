@@ -22,8 +22,12 @@ spec:
       app: redis-cart
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
       labels:
         app: redis-cart
+        app.newrelic.io/name: redis
     spec:
       containers:
       - name: redis
@@ -56,6 +60,21 @@ spec:
           requests:
             cpu: 70m
             memory: 200Mi
+      - name: redis-exporter
+        image: oliver006/redis_exporter:latest
+        securityContext:
+          runAsUser: 59000
+          runAsGroup: 59000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        ports:
+        - containerPort: 9121
       volumes:
       - name: redis-data
         emptyDir: {}

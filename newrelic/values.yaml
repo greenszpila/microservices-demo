@@ -1,0 +1,240 @@
+global:
+  cluster: atg-demo
+  licenseKey: $NEW_RELIC_LICENSE_KEY 
+    #valueFrom:
+    #  secretKeyRef:
+    #    name: nr-license-key
+    #    key: nr-license-key
+  lowDataMode: true
+  customAttributes:
+    team: kriss
+    location: northpole
+kube-state-metrics:
+  enabled: true
+  image:
+    tag: v2.10.0
+kubeEvents:
+  enabled: true
+logging:
+  enabled: true
+newrelic-logging:
+  enabled: true
+  lowDataMode: true
+  fluentBit:
+    path: "/var/log/containers/*.log" # default path 
+    #path: /var/log/containers/*(my-namespace1,my-namespace2)*.log  # Include two namespaces
+    # OR
+    #path: /var/log/containers/*!(cafe,nginx)*.log  # Exclude two namespaces
+    config:
+      lowDataModeFilters: |
+        [FILTER]
+            Name           kubernetes
+            Match          kube.*
+            # We need the full DNS suffix as Windows only supports resolving names with this suffix
+            # See: https://kubernetes.io/docs/setup/production-environment/windows/intro-windows-in-kubernetes/#dns-limitations
+            Kube_URL       https://kubernetes.default.svc.cluster.local:443
+            Buffer_Size    ${K8S_BUFFER_SIZE}
+            K8S-Logging.Exclude ${K8S_LOGGING_EXCLUDE}
+            Labels         Off
+            Annotations    Off
+            #Exclude_Path   /var/log/containers/*_newrelic*_*.log, /var/log/containers/*_kube-system_*.log
+
+
+        [FILTER]
+            Name grep
+            Match kube.*
+            Exclude $kubernetes['namespace_name'] newrelic
+            Exclude $kubernetes['namespace_name'] kube-system
+        
+        # Include namespace filter example
+        #[FILTER]
+        #    Name           grep
+        #    Match          kube.*
+        #    Regex          $kubernetes['namespace_name'] store    
+
+        [FILTER]
+            Name           nest
+            Match          *
+            Operation      lift
+            Nested_under   kubernetes
+
+        [FILTER]
+            Name           record_modifier
+            Match          *
+            Record         cluster_name ${CLUSTER_NAME}
+            Allowlist_key  container_name
+            Allowlist_key  namespace_name
+            Allowlist_key  pod_name
+            Allowlist_key  stream
+            Allowlist_key  message
+            Allowlist_key  log
+
+newrelic-pixie:
+  apiKey: $NEW_RELIC_PIXIE_LICENSE_KEY 
+  enabled: true
+# prometheus-agent config from SKO instruqt lab
+newrelic-prometheus-agent:
+  # newrelic-prometheus-agent.enabled -- Install the [`newrelic-prometheus-agent` chart](https://github.com/newrelic/newrelic-prometheus-configurator/tree/main/charts/newrelic-prometheus-agent)
+  enabled: true
+  fullnameOverride: "newrelic-prometheus-agent"
+  config:
+    common:
+      scrape_interval: 30s
+    newrelic_remote_write:
+      extra_write_relabel_configs:
+        # Enable the extra_write_relabel_configs below for backwards compatibility with legacy POMI labels.
+        # This helpful when migrating from POMI to ensure that Prometheus metrics will contain both labels (e.g. cluster_name and clusterName).
+        # For more migration info, please visit the [migration guide](https://docs.newrelic.com/docs/infrastructure/prometheus-integrations/install-configure-prometheus-agent/migration-guide/).
+        - source_labels: [namespace]
+          action: replace
+          target_label: namespaceName
+        - source_labels: [node]
+          action: replace
+          target_label: nodeName
+        - source_labels: [pod]
+          action: replace
+          target_label: podName
+        - source_labels: [service]
+          action: replace
+          target_label: serviceName
+        - source_labels: [cluster_name]
+          action: replace
+          target_label: clusterName
+        - source_labels: [job]
+          action: replace
+          target_label: scrapedTargetKind
+        - source_labels: [instance]
+          action: replace
+          target_label: scrapedTargetInstance
+
+    kubernetes:
+      integrations_filter:
+        # INSTRUQT: Challenge 2
+        enabled: true
+        # -- source_labels used to fetch label values in the relabel config added by the integration filters configuration
+        source_labels: ["app.kubernetes.io/name", "app.newrelic.io/name", "k8s-app"]
+        # -- app_values used to create the regex used in the relabel config added by the integration filters configuration.
+        # Note that a single regex will be created from this list, example: '.*(?i)(app1|app2|app3).*'
+        app_values: ["redis", "traefik", "calico", "nginx", "coredns", "kube-dns", "etcd", "cockroachdb"]
+
+      # Kubernetes jobs define [kubernetes_sd_configs](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#kubernetes_sd_config)
+      # to discover and scrape Kubernetes objects. Besides, a set of relabel_configs are included in order to include some Kubernetes metadata as
+      # Labels. For example, address, metrics_path, URL scheme, prometheus_io_parameters, namespace, pod name, service name and labels are taken
+      # to set the corresponding labels.
+      # Please note, the relabeling allows configuring the pod/endpoints scrape using the following annotations:
+      # - `prometheus.io/scheme`: If the metrics endpoint is secured then you will need to set this to `https`
+      # - `prometheus.io/path`: If the metrics path is not `/metrics` override this.
+      # - `prometheus.io/port`: If the metrics are exposed on a different port to the service for service endpoints or to
+      #   the default 9102 for pods.
+      # - `prometheus.io/param_<param-name>`: To include additional parameters in the scrape URL.
+      jobs:
+      # INSTRUQT: Challenge 2
+      # 'default' scrapes all targets having 'prometheus.io/scrape: true'
+      # out of the box, since kubernetes.integrations_filter.enabled=true then only targets selected by the integration filters are considered.
+      - job_name_prefix: default
+        target_discovery:
+          pod: true
+          endpoints: true
+          filter:
+            annotations:
+              prometheus.io/scrape: true
+       # as redis are being scraped by the default job due to the annotation 
+       # metric_relabel has to be placed here        
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'redis_(commands|config).*'
+            action: drop
+      # INSTRUQT: Challenge 3
+      # 'newrelic' scrapes all targets having 'newrelic.io/scrape: true'.
+      # This is useful to extend the targets scraped by the 'default' job allowlisting services leveraging `newrelic.io/scrape` annotation
+      - job_name_prefix: newrelic
+        integrations_filter:
+          enabled: false
+        target_discovery:
+          pod: true
+          endpoints: true
+          filter:
+            annotations:
+              newrelic.io/scrape: true
+
+    static_targets:
+      jobs:
+      # # INSTRUQT: Challenge 5
+      # - job_name: instruqt-node-exporter
+      #   targets:
+      #     - "INSTRUQT_HOSTNAME:9100"
+      #   basic_auth:
+      #     username: prometheus
+      #     password: PASSWORD
+      # # INSTRUQT: Challenge 5
+      #   extra_metric_relabel_config:
+      #     # Drop all metrics in the node_sockstat and node_timex metric groups
+      #     - source_labels: [__name__]
+      #       regex: node_(sockstat|timex).*
+      #       action: drop
+      #     # Drop all devices except ens4 and cni0 for all node_network metrics
+      #     - source_labels: [__name__, device]
+      #       regex: node_network.*;(ens4|cni0)
+      #       action: keep
+
+      - job_name: self-metrics
+        skip_sharding: true  # sharding is skipped to obtain self-metrics from all Prometheus servers.
+        targets:
+          - "localhost:9090"
+        extra_metric_relabel_config:
+          - source_labels: [__name__]
+            regex: "\
+              prometheus_agent_active_series|\
+              prometheus_target_interval_length_seconds|\
+              prometheus_target_scrape_pool_targets|\
+              prometheus_remote_storage_samples_pending|\
+              prometheus_remote_storage_samples_in_total|\
+              prometheus_remote_storage_samples_retried_total|\
+              prometheus_agent_corruptions_total|\
+              prometheus_remote_storage_shards|\
+              prometheus_sd_kubernetes_events_total|\
+              prometheus_agent_checkpoint_creations_failed_total|\
+              prometheus_agent_checkpoint_deletions_failed_total|\
+              prometheus_remote_storage_samples_dropped_total|\
+              prometheus_remote_storage_samples_failed_total|\
+              prometheus_sd_kubernetes_http_request_total|\
+              prometheus_agent_truncate_duration_seconds_sum|\
+              prometheus_build_info|\
+              process_resident_memory_bytes|\
+              process_virtual_memory_bytes|\
+              process_cpu_seconds_total"
+            action: keep
+
+# newrelic-prometheus-agent:
+#   config:
+#     kubernetes:
+#       integrations_filter:
+#         enabled: false
+#   enabled: true
+#   lowDataMode: true
+pixie-chart:
+  clusterName: atg-demo
+  deployKey: $PIXIE_KEY 
+  enabled: true
+
+newrelic-infrastructure:
+  privileged: true
+  #env:
+  #  - name: NRIA_CUSTOM_ATTRIBUTES
+  #    value: '{"team":"devops","environment":"production"}'
+  integrations:
+    redis-sampleapp.yaml:
+      discovery:
+        command:
+          # --namespaces: Comma separated list of namespaces to discover pods on
+          # --port: Port used to connect to the kubelet. Default is 10255
+          # --tls: Use secure (TLS) connection
+          exec: /var/db/newrelic-infra/nri-discovery-kubernetes --tls --port 10250
+          match:
+            label.app: redis-cart
+
+      integrations:
+        - name: nri-redis
+          env:
+            HOSTNAME: ${discovery.ip}
+            PORT: 6379
