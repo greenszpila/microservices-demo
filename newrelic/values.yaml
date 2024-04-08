@@ -1,10 +1,8 @@
 global:
   cluster: atg-demo
   licenseKey: $NEW_RELIC_LICENSE_KEY 
-    #valueFrom:
-    #  secretKeyRef:
-    #    name: nr-license-key
-    #    key: nr-license-key
+  #customSecretName: nr-license-key
+  #customSecretLicenseKey: nr-license-key
   lowDataMode: true
   customAttributes:
     team: kriss
